@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Flow Simulator MVP</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sim-container {
+            flex: 1;
+            position: relative;
+            background: #333;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        #control-panel {
+            height: 150px;
+            background: #222;
+            border-top: 2px solid #444;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+        button {
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #c0392b;
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        .info-text {
+            font-size: 14px;
+            color: #aaa;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="sim-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="control-panel">
+        <div>
+            <strong>MVP Control Panel</strong>
+            <div class="info-text">Tap the brakes to trigger the density wave. Accurate gap tracking ensures proper spacing recovery.</div>
+        </div>
+        <button id="brakeBtn">Tap the Brakes</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const brakeBtn = document.getElementById('brakeBtn');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight * 0.75;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let simulationStarted = false;
+        let roadOffset = 0;
+        const baseSpeed = 65; // mph
+        const pixelsPerMph = 1.5;
+
+        const laneHeight = 60;
+        const roadY = (canvas.height - (laneHeight * 3)) / 2;
+
+        const carLength = 50;
+        const carWidth = 25;
+        const spacing = 130;
+        
+        let cars = [];
+
+        function initCars() {
+            cars = [];
+            const numCarsPerLane = Math.ceil(canvas.width / spacing) + 4;
+            
+            for (let lane = 0; lane < 3; lane++) {
+                for (let i = 0; i < numCarsPerLane; i++) {
+                    let x = i * spacing - 50;
+                    let isMiddleLane = (lane === 1);
+                    let isControlCar = isMiddleLane && Math.abs(x - (canvas.width / 2)) < spacing / 2;
+
+                    cars.push({
+                        lane: lane,
+                        x: x,
+                        speed: baseSpeed,
+                        targetSpeed: baseSpeed,
+                        isYellow: isControlCar,
+                        brakeLight: false,
+                        brakeDurationTimer: 0,
+                        hasReacted: false
+                    });
+                }
+            }
+        }
+        initCars();
+
+        let controlCar = cars.find(c => c.isYellow);
+
+        brakeBtn.addEventListener('click', () => {
+            if (!simulationStarted && controlCar) {
+                simulationStarted = true;
+                brakeBtn.disabled = true;
+                triggerYellowBrakes();
+            }
+        });
+
+        function triggerYellowBrakes() {
+            controlCar.targetSpeed = 40;
+            controlCar.brakeLight = true;
+            controlCar.brakeDurationTimer = 1.5;
+            controlCar.hasReacted = true;
+
+            queueFollowerReaction(controlCar, 1);
+        }
+
+        function getCarBehind(car) {
+            let sameLaneCars = cars.filter(c => c.lane === car.lane && c.x < car.x);
+            if (sameLaneCars.length === 0) return null;
+            return sameLaneCars.reduce((prev, curr) => (curr.x > prev.x) ? curr : prev);
+        }
+
+        function getCarAhead(car) {
+            let sameLaneCars = cars.filter(c => c.lane === car.lane && c.x > car.x);
+            if (sameLaneCars.length === 0) return null;
+            return sameLaneCars.reduce((prev, curr) => (curr.x < prev.x) ? curr : prev);
+        }
+
+        function getAdjacentCars(car) {
+            let adjLanes = [car.lane - 1, car.lane + 1].filter(l => l >= 0 && l < 3);
+            let results = [];
+            adjLanes.forEach(l => {
+                let laneCars = cars.filter(c => c.lane === l);
+                if (laneCars.length > 0) {
+                    let closest = laneCars.reduce((prev, curr) => Math.abs(curr.x - car.x) < Math.abs(prev.x - car.x) ? curr : prev);
+                    results.push(closest);
+                }
+            });
+            return results;
+        }
+
+        function queueFollowerReaction(car, currentLevel) {
+            let carBehind = getCarBehind(car);
+            if (carBehind && !carBehind.hasReacted) {
+                carBehind.hasReacted = true;
+                
+                let nextSpeed = Math.max(10, 65 - (currentLevel * 9));
+                let nextDuration = 1.5 + (currentLevel * 0.5);
+                
+                setTimeout(() => {
+                    carBehind.targetSpeed = nextSpeed;
+                    carBehind.brakeLight = true;
+                    carBehind.brakeDurationTimer = nextDuration;
+                    queueFollowerReaction(carBehind, currentLevel + 1);
+                }, 1000);
+            }
+
+            let adjCars = getAdjacentCars(car);
+            adjCars.forEach(adjCar => {
+                if (!adjCar.hasReacted) {
+                    adjCar.hasReacted = true;
+                    let halfDrop = (currentLevel * 4.5);
+                    let nextSpeed = Math.max(15, 65 - halfDrop);
+                    let nextDuration = 1.0 + (currentLevel * 0.25);
+
+                    setTimeout(() => {
+                        adjCar.targetSpeed = nextSpeed;
+                        adjCar.brakeLight = true;
+                        adjCar.brakeDurationTimer = nextDuration;
+                        queueFollowerReaction(adjCar, currentLevel + 1);
+                    }, 1000);
+                }
+            });
+        }
+
+        let lastTime = performance.now();
+
+        function update(time) {
+            let dt = (time - lastTime) / 1000;
+            lastTime = time;
+            if (dt > 0.1) dt = 0.1;
+
+            if (!simulationStarted) {
+                roadOffset += baseSpeed * pixelsPerMph * dt;
+            } else {
+                // First pass: manage target speeds based on true distance to car ahead
+                cars.forEach(car => {
+                    let carAhead = getCarAhead(car);
+                    if (carAhead) {
+                        // True gap = space between back of front car and front of back car
+                        let actualGap = carAhead.x - car.x - carLength;
+                        let minSafeGap = carLength * 1.5; // 1.5 car lengths threshold
+
+                        if (actualGap < minSafeGap) {
+                            // Too close: drive 2mph slower than car ahead until gap is restored
+                            car.targetSpeed = Math.max(0, carAhead.speed - 2);
+                            car.brakeLight = true;
+                        } else {
+                            // Sufficient gap (>= 1.5 car lengths): resume matching car ahead's speed if brake timer expired
+                            if (car.brakeDurationTimer <= 0) {
+                                car.targetSpeed = Math.min(baseSpeed, carAhead.speed);
+                                car.brakeLight = false;
+                            }
+                        }
+                    } else {
+                        // No car ahead, return to base speed if brake timer expired
+                        if (car.brakeDurationTimer <= 0) {
+                            car.targetSpeed = baseSpeed;
+                            car.brakeLight = false;
+                        }
+                    }
+                });
+
+                // Second pass: update timers, physics, and positions
+                cars.forEach(car => {
+                    if (car.brakeDurationTimer > 0) {
+                        car.brakeDurationTimer -= dt;
+                    }
+
+                    if (car.speed < car.targetSpeed) {
+                        car.speed += 15 * dt; // acceleration rate
+                        if (car.speed > car.targetSpeed) car.speed = car.targetSpeed;
+                    } else if (car.speed > car.targetSpeed) {
+                        car.speed -= 40 * dt; // deceleration rate
+                        if (car.speed < car.targetSpeed) car.speed = car.targetSpeed;
+                    }
+
+                    car.x += car.speed * pixelsPerMph * dt;
+
+                    // Hard safety clamp to prevent overlapping physics
+                    let carAhead = getCarAhead(car);
+                    if (carAhead && car.x > carAhead.x - carLength - 5) {
+                        car.x = carAhead.x - carLength - 5;
+                        car.speed = carAhead.speed;
+                    }
+                });
+
+                // Remove cars that have gone off the right side
+                cars = cars.filter(car => car.x < canvas.width + 150);
+
+                // Spawn new cars on the left
+                for (let lane = 0; lane < 3; lane++) {
+                    let laneCars = cars.filter(c => c.lane === lane);
+                    let rearmostCar = laneCars.length > 0 ? laneCars.reduce((prev, curr) => curr.x < prev.x ? curr : prev) : null;
+
+                    if (!rearmostCar || rearmostCar.x > -80) {
+                        let newX = rearmostCar ? rearmostCar.x - spacing : -100;
+                        cars.push({
+                            lane: lane,
+                            x: newX,
+                            speed: baseSpeed,
+                            targetSpeed: baseSpeed,
+                            isYellow: false,
+                            brakeLight: false,
+                            brakeDurationTimer: 0,
+                            hasReacted: true
+                        });
+                    }
+                }
+            }
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Road Background
+            ctx.fillStyle = '#444';
+            ctx.fillRect(0, roadY, canvas.width, laneHeight * 3);
+
+            // Draw Lane Dividers
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([20, 20]);
+            ctx.lineDashOffset = simulationStarted ? 0 : -roadOffset;
+
+            for (let i = 1; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, roadY + (i * laneHeight));
+                ctx.lineTo(canvas.width, roadY + (i * laneHeight));
+                ctx.stroke();
+            }
+            ctx.setLineDash([]);
+
+            // Draw Cars
+            cars.forEach(car => {
+                let screenX = car.x;
+                let screenY = roadY + (car.lane * laneHeight) + (laneHeight - carWidth) / 2;
+
+                if (screenX < -150 || screenX > canvas.width + 150) return;
+
+                // Car Body
+                ctx.fillStyle = car.isYellow ? '#f1c40f' : '#7f8c8d';
+                ctx.fillRect(screenX, screenY, carLength, carWidth);
+
+                // Brake Lights
+                if (car.brakeLight) {
+                    ctx.fillStyle = '#e74c3c';
+                    ctx.fillRect(screenX, screenY + 2, 4, 6);
+                    ctx.fillRect(screenX, screenY + carWidth - 8, 4, 6);
+                }
+
+                // Speed Text
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(`${Math.round(car.speed)} mph`, screenX + carLength / 2, screenY - 6);
+            });
+        }
+
+        requestAnimationFrame(update);
+    </script>
+</body>
+</html>
